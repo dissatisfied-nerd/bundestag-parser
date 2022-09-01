@@ -4,66 +4,73 @@ from bs4 import BeautifulSoup
 from my_proxy import Proxy
 
 import os
+import multiprocessing
+import json
 
-if __name__ == "__main__":
+def get_items(i):
 
-    path_pages = "/home/axr/prog/parsing/Bundestag/template_data/pages"
-    path_items = "/home/axr/prog/parsing/Bundestag/template_data/items"
+    global proxy
+    proxy = Proxy() 
 
-    proxy_object = Proxy()
-    item_link = "https://icanhazip.com/"
-    proxy_counter = 0
+    print(f"Parsing page #{i}...", end="")
 
-    for i in range(0, 732 + 1, 12):
+    header = {
+        "user-agent" : UserAgent().random
+    }
 
-        if proxy_counter % 5 == 0:
-            proxies = proxy_object.get_random(item_link)
-            print(f"Iteration #{i}, proxy:", {proxies.get("http")})
-        
-        proxy_counter += 1
+    os.chdir(path_pages)
+    
+    with open(f"page_{i}.html") as file:
+        response = file.read()
 
-        header = {
-            "user-agent" : UserAgent().random
-        }
+    soup = BeautifulSoup(response, "lxml")
+    people = soup.find_all("a")
 
-        os.chdir(path_pages)
-        
-        with open(f"page_{i}.html") as file:
-            response = file.read()
+    for j in range(len(people)):
 
-        soup = BeautifulSoup(response, "lxml")
-        people = soup.find_all("a")
+        item_link = people[j].get("href")
+        item_response = requests.get(item_link, headers=header)
+        #item_response = proxy.get_response(item_link)
 
-        for j in range(len(people)):
-
-            item_link = people[j].get("href").replace("https", "http")
+        if item_response.text.count("\n") == 0:
+            item_response = proxy.get_response(item_link)
+    
+        if os.path.exists(f"{path_items}/page_{i}") == False:
             
-            item_response = requests.get(
-                item_link,
-                headers=header,
-                proxies=proxies
-            ).text
+            os.chdir(path_items)
+            os.mkdir(f"page_{i}")
+            os.chdir(f"{path_items}/page_{i}")
+    
+        with open(f"item_{j}.html", "w") as file:
+            file.write(item_response.text)
 
-            if item_response.count("\n") == 0:
-                print(f"Last iteration - {i}")
-                exit()
-
-            if os.path.exists(f"{path_items}/page_{i}") == False:
-                
-                os.chdir(path_items)
-                os.mkdir(f"page_{i}")
-                os.chdir(f"{path_items}/page_{i}")
-
-            with open(f"item_{j}.html", "w") as file:
-                file.write(item_response)
+    print("succesfully.")
 
 
-        '''data_base = []
+def item_sort(elem):
+    return int(
+        elem.replace("item_", "").replace(".html", "")
+    )
 
-        for elem in people:
 
-            item_link = elem.get("href")
-            item_response = requests.get(item_link, headers=header).text
+def make_db(page):
+
+    os.chdir(f"{path_items}/{page}")
+
+    items = os.listdir(os.getcwd())
+    items.sort(
+        key=item_sort
+    )
+
+    data = []
+
+    for item in items:
+
+        with open(item) as file:
+            item_response = file.read()
+
+        try:
+
             item_soup = BeautifulSoup(item_response, "lxml")
 
             item_info = item_soup.find("h3").text.strip().split(", ")
@@ -109,7 +116,52 @@ if __name__ == "__main__":
             }
             item_dict.update(contacts_dict)
 
-            data_base.append(item_dict)
+            data.append(item_dict)
 
-    with open("data_base.json", "a") as file:
-        json.dump(data_base, file, indent=4, ensure_ascii=False)'''
+        except:
+            os.chdir(path_template_data)
+
+            with open("errors.txt", "a") as file:
+                file.write(f"Error: {page}, {item}.\n")
+
+            os.chdir(f"{path_items}/{page}")
+
+    return data
+
+
+def page_sort(elem):
+    return int(elem.replace("page_", ""))
+
+
+if __name__ == "__main__":
+
+    global path_pages, path_items
+
+    path_pages = "/home/axr/projects/Bundestag/template_data/pages"
+    path_items = "/home/axr/projects/Bundestag/template_data/items"
+    path_template_data = "/home/axr/projects/Bundestag/template_data"
+
+    os.chdir(path_items)
+    pages = os.listdir(path_items)
+    pages.sort(
+        key=page_sort
+    )
+    
+    with multiprocessing.Pool(multiprocessing.cpu_count()) as process:
+        template_data_base = [elem for elem in
+            process.map(
+                make_db,
+                pages
+            )
+        ]
+
+    data_base = []
+
+    for elem in template_data_base:
+        for value in elem:
+            data_base.append(value)
+
+    os.chdir(path_template_data)
+
+    with open("data_base.json", "w") as file:
+        json.dump(data_base, file, indent=4, ensure_ascii=False)
